@@ -1,5 +1,7 @@
 import type { Confidence, Role, Status } from '../types';
 import type { Side } from '../engine/relations';
+import type { PrimitiveRel } from '../engine/ops';
+import { translate, type TKey, type UiLang } from '../i18n';
 
 export const ROLE_META: Record<Role, { hi: string; en: string; color: string }> = {
   suspect: { hi: 'संदिग्ध', en: 'Suspect', color: 'var(--role-suspect)' },
@@ -35,7 +37,7 @@ export const SIDE_META: Record<Side, { hi: string; en: string }> = {
   unlinked: { hi: 'जुड़े नहीं', en: 'Not linked' },
 };
 
-const PALETTE = ['#2563eb', '#0d9488', '#7c3aed', '#c2410c', '#be185d', '#4d7c0f', '#0369a1', '#a16207'];
+const PALETTE = ['#3a6ea5', '#2f7d74', '#6f58a8', '#a4623a', '#a34d73', '#5a7a3a', '#2f6f9a', '#8a7330'];
 
 export function avatarColor(id: string): string {
   let h = 0;
@@ -55,15 +57,28 @@ export function genLabel(g: number): string {
   return g === 0 ? 'G0' : g > 0 ? `G+${g}` : `G${g}`;
 }
 
-export const GEN_NAMES: Record<number, string> = {
-  3: 'परदादा', 2: 'दादा-नाना', 1: 'माता-पिता', 0: 'Focus', [-1]: 'संतान', [-2]: 'पोते-नाती', [-3]: 'परपोते',
-};
+/** Row names of the generation lanes (tree view), in the UI language. */
+export function genName(g: number, lang: UiLang): string {
+  return g >= -3 && g <= 3 ? translate(lang, `gen.${g}` as TKey) : '';
+}
 
-export function ageText(dob?: string, approx?: number): string {
+/** "A is the <rel> of B" choices for linking two people directly. */
+export const PRIM_META: { rel: PrimitiveRel; hi: string; en: string }[] = [
+  { rel: 'father', hi: 'पिता', en: 'Father' },
+  { rel: 'mother', hi: 'माता', en: 'Mother' },
+  { rel: 'son', hi: 'बेटा', en: 'Son' },
+  { rel: 'daughter', hi: 'बेटी', en: 'Daughter' },
+  { rel: 'husband', hi: 'पति', en: 'Husband' },
+  { rel: 'wife', hi: 'पत्नी', en: 'Wife' },
+  { rel: 'brother', hi: 'भाई', en: 'Brother' },
+  { rel: 'sister', hi: 'बहन', en: 'Sister' },
+];
+
+export function ageText(dob: string | undefined, approx: number | undefined, lang: UiLang): string {
   if (dob) {
     const y = parseInt(dob.slice(0, 4), 10);
-    if (!Number.isNaN(y)) return `${new Date().getFullYear() - y} वर्ष`;
+    if (!Number.isNaN(y)) return translate(lang, 'common.yrs', { n: new Date().getFullYear() - y });
   }
-  if (approx != null) return `~${approx} वर्ष`;
+  if (approx != null) return `~${translate(lang, 'common.yrs', { n: approx })}`;
   return '';
 }

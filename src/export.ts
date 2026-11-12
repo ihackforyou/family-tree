@@ -1,6 +1,7 @@
 import { toPng } from 'html-to-image';
 import { getNodesBounds, getViewportForBounds, type Node } from '@xyflow/react';
 import type { CaseFile } from './types';
+import { localeOf, t } from './i18n';
 
 const MAX_SIDE = 6000;
 
@@ -26,7 +27,7 @@ async function sha256(text: string): Promise<string> {
 /** Render the whole tree (not just the visible part) to a PNG data URL, in the light theme. */
 async function captureTree(nodes: Node[]): Promise<{ url: string; w: number; h: number }> {
   const el = document.querySelector<HTMLElement>('.react-flow__viewport');
-  if (!el) throw new Error('Canvas नहीं मिला');
+  if (!el) throw new Error(t('err.noCanvas'));
   const bounds = getNodesBounds(nodes);
   const pad = 40;
   let w = bounds.width + pad * 2;
@@ -89,10 +90,10 @@ async function compose(cf: CaseFile, nodes: Node[], userName: string) {
   const now = new Date();
   const bits = [
     cf.firNo && `FIR: ${cf.firNo}`,
-    cf.policeStation && `थाना: ${cf.policeStation}`,
+    cf.policeStation && t('export.ps', { v: cf.policeStation }),
     cf.focusId && cf.persons[cf.focusId] && `Focus: ${cf.persons[cf.focusId].name}`,
-    `व्यक्ति: ${Object.keys(cf.persons).length}`,
-    `Export: ${now.toLocaleString('hi-IN')}`,
+    t('export.people', { n: Object.keys(cf.persons).length }),
+    `Export: ${now.toLocaleString(localeOf())}`,
     `User: ${userName}`,
   ].filter(Boolean);
   ctx.fillText(bits.join('   ·   '), 32, 78);

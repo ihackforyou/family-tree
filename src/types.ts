@@ -21,6 +21,10 @@ export interface Person {
   address?: string;
   firs: string[];
   notes?: string;
+  /** How this person came into the case (e.g. "CAF of the fraud SIM shows his PoS ID"). */
+  source?: string;
+  /** Key evidence about this person (statements, bank records, CDR …). */
+  evidence?: string;
   /** Placeholder created automatically for an unknown in-between relative. */
   isGhost?: boolean;
   /** Elder / younger hint relative to one sibling, when no DOB is known. */
@@ -65,6 +69,8 @@ export interface CaseFile {
   audit: AuditEntry[];
   createdAt: number;
   updatedAt: number;
+  /** Cards the user dragged by hand, per view: person id → top-left position. */
+  layout?: Partial<Record<'chart' | 'tree' | 'network', Record<string, { x: number; y: number }>>>;
 }
 
 export interface AuditEntry {

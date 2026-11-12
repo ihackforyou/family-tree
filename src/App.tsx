@@ -2,25 +2,35 @@ import { useEffect, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { UserPlus } from 'lucide-react';
+import { Toaster } from 'sonner';
 import { useStore } from './store';
 import { addPerson, newPerson } from './engine/ops';
 import { TopBar } from './components/TopBar';
+import { LeftRail } from './components/LeftRail';
+import { RightRail } from './components/RightRail';
+import { BottomBar } from './components/BottomBar';
 import { Canvas } from './components/Canvas';
-import { SidePanel } from './components/SidePanel';
+import { PersonPanel } from './components/PanelSheet';
 import { AddDialog } from './components/AddDialog';
 import { LinkDialog } from './components/LinkDialog';
 import { CommandPalette } from './components/CommandPalette';
 import { CasesDialog } from './components/CasesDialog';
+import { AiDialog } from './components/AiDialog';
+import { SuspectTable } from './components/SuspectTable';
+import { TooltipProvider } from './components/Rail';
+import { ConfirmHost } from './components/ui/Confirm';
+import { useT } from './i18n/useT';
 
 function FirstSuspect() {
   const mutate = useStore((s) => s.mutate);
   const select = useStore((s) => s.select);
   const [name, setName] = useState('');
   const [gender, setGender] = useState<'male' | 'female'>('male');
+  const t = useT();
   const go = () => {
     if (!name.trim()) return;
     let id = '';
-    mutate('add', `Suspect ${name} जोड़ा`, (d) => {
+    mutate('add', t('audit.addSuspect', { name: name.trim() }), (d) => {
       id = addPerson(d, newPerson({ name: name.trim(), gender, role: 'suspect' })).id;
       d.focusId = id;
     });
@@ -30,14 +40,14 @@ function FirstSuspect() {
     <div className="empty">
       <div className="empty-card">
         <UserPlus size={28} color="var(--accent)" />
-        <h3 style={{ margin: '10px 0 4px' }}>Suspect से शुरू करें</h3>
-        <p className="muted" style={{ marginTop: 0 }}>पहले मुख्य suspect जोड़ें। फिर उसके card के "+" से परिवार और सहयोगी जोड़ते जाएँ।</p>
-        <input className="input" autoFocus placeholder="Suspect का नाम" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && go()} />
+        <h3 style={{ margin: '10px 0 4px' }}>{t('first.title')}</h3>
+        <p className="muted" style={{ marginTop: 0 }}>{t('first.body')}</p>
+        <input className="input" autoFocus placeholder={t('first.ph')} value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && go()} />
         <div className="radio-row" style={{ justifyContent: 'center', margin: '10px 0' }}>
-          <button className={`chip ${gender === 'male' ? 'on' : ''}`} onClick={() => setGender('male')}>पुरुष</button>
-          <button className={`chip ${gender === 'female' ? 'on' : ''}`} onClick={() => setGender('female')}>महिला</button>
+          <button className={`chip ${gender === 'male' ? 'on' : ''}`} onClick={() => setGender('male')}>{t('common.male')}</button>
+          <button className={`chip ${gender === 'female' ? 'on' : ''}`} onClick={() => setGender('female')}>{t('common.female')}</button>
         </div>
-        <button className="btn primary" disabled={!name.trim()} onClick={go} style={{ width: '100%', justifyContent: 'center' }}>जोड़ें</button>
+        <button className="btn primary" disabled={!name.trim()} onClick={go} style={{ width: '100%', justifyContent: 'center' }}>{t('common.add')}</button>
       </div>
     </div>
   );
@@ -45,11 +55,11 @@ function FirstSuspect() {
 
 function Shell() {
   const cf = useStore((s) => s.cf);
+  const view = useStore((s) => s.view);
   const theme = useStore((s) => s.theme);
   const selectedId = useStore((s) => s.selectedId);
   const dialog = useStore((s) => s.dialog);
   const palette = useStore((s) => s.palette);
-  const toast = useStore((s) => s.toast);
   const ready = useStore((s) => s.ready);
 
   useEffect(() => {
@@ -63,6 +73,7 @@ function Shell() {
       const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT');
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); st.setPalette(!st.palette); return; }
+      if (mod && e.key.toLowerCase() === 'i') { e.preventDefault(); if (st.cf) st.setDialog({ type: 'ai' }); return; }
       if (typing) return;
       if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); if (e.shiftKey) st.redo(); else st.undo(); return; }
       if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); st.redo(); return; }
@@ -78,16 +89,25 @@ function Shell() {
   return (
     <div className="app">
       <TopBar />
-      <div className="main">
-        {cf ? <Canvas /> : <div className="canvas" />}
-        {empty && <FirstSuspect />}
-        {selectedOk && <SidePanel />}
+      <div className="workspace">
+        <LeftRail />
+        <div className="center">
+          <div className="main">
+            {cf ? (view === 'table' ? <SuspectTable /> : <Canvas />) : <div className="canvas" />}
+            {empty && <FirstSuspect />}
+            {selectedOk && <PersonPanel />}
+          </div>
+          <BottomBar />
+        </div>
+        <RightRail />
       </div>
       {cf && dialog?.type === 'add' && cf.persons[dialog.anchorId] && <AddDialog anchorId={dialog.anchorId} preset={dialog.preset} tplId={dialog.tplId} />}
       {cf && dialog?.type === 'link' && cf.persons[dialog.aId] && cf.persons[dialog.bId] && <LinkDialog aId={dialog.aId} bId={dialog.bId} />}
       {(dialog?.type === 'cases' || (ready && !cf)) && <CasesDialog />}
+      {cf && dialog?.type === 'ai' && <AiDialog />}
       {cf && palette && <CommandPalette />}
-      {toast && <div className={`toast ${toast.kind === 'err' ? 'err' : ''}`} role="status">{toast.msg}</div>}
+      <Toaster theme={theme} position="bottom-center" offset={60} gap={8} visibleToasts={4} className="toaster" />
+      <ConfirmHost />
     </div>
   );
 }
@@ -97,7 +117,9 @@ export default function App() {
   useEffect(() => { void init(); }, [init]);
   return (
     <ReactFlowProvider>
-      <Shell />
+      <TooltipProvider>
+        <Shell />
+      </TooltipProvider>
     </ReactFlowProvider>
   );
 }

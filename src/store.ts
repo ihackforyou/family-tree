@@ -1,21 +1,27 @@
 import { create } from 'zustand';
+import { toast } from 'sonner';
 import type { CaseFile, Lang } from './types';
 import type { Side } from './engine/relations';
 import { draftOf } from './engine/ops';
 import { createAdapter, getConfig, metaOf, type CaseMeta } from './storage';
 import { demoCase, emptyCase } from './demo';
+import { zenithDemoCase } from './demoZenith';
+import { isUiLang, setRuntimeUiLang, t, type UiLang } from './i18n';
 
 let cfg = getConfig();
 let adapter = createAdapter(cfg);
 const MAX_HISTORY = 100;
 
-export type View = 'tree' | 'network';
+/** chart = compact family chart (couples + children); tree = generation × side lanes; network = radial. */
+export type View = 'chart' | 'tree' | 'network' | 'table';
+export type { CardSize } from './engine/chart';
 
 export type Dialog =
   | { type: 'add'; anchorId: string; preset?: 'up' | 'down' | 'sibling' | 'spouse' | 'social'; tplId?: string }
   | { type: 'link'; aId: string; bId: string }
   | { type: 'cases' }
   | { type: 'newCase' }
+  | { type: 'ai' }
   | null;
 
 interface State {
@@ -24,7 +30,10 @@ interface State {
   cf: CaseFile | null;
   past: CaseFile[];
   future: CaseFile[];
+  /** Language of computed relation names (मामा / Mother's brother …). */
   lang: Lang;
+  /** Language of the interface (buttons, dialogs, toasts). */
+  uiLang: UiLang;
   view: View;
   theme: 'dark' | 'light';
   collapsed: Set<Side>;
@@ -33,7 +42,6 @@ interface State {
   pathTo: string | null;
   dialog: Dialog;
   palette: boolean;
-  toast: { msg: string; kind: 'ok' | 'err' } | null;
   saving: boolean;
   roleFilter: Set<string>;
   ready: boolean;
@@ -41,7 +49,8 @@ interface State {
   init(): Promise<void>;
   openCase(id: string): Promise<void>;
   newCase(title: string, firNo?: string): Promise<void>;
-  loadDemo(): Promise<void>;
+  /** basic = small family demo; zenith = ₹5 Cr fraud accused network (matches the Evidence Board demo). */
+  loadDemo(kind?: 'basic' | 'zenith'): Promise<void>;
   deleteCase(id: string): Promise<void>;
   importCase(cf: CaseFile): Promise<void>;
   mutate(action: string, detail: string, fn: (d: CaseFile) => void): boolean;
@@ -50,15 +59,38 @@ interface State {
   setFocus(id: string): void;
   select(id: string | null): void;
   setLang(l: Lang): void;
+  /** Switch the interface language; relation names follow (Urdu / Punjabi can still be picked afterwards). */
+  setUiLang(l: UiLang): void;
   setView(v: View): void;
+  cardSize: import('./engine/chart').CardSize;
+  toggleCardSize(): void;
+  /** Save a card the user dragged (kept per view, not part of undo history). */
+  moveCard(view: 'chart' | 'tree' | 'network', id: string, pos: { x: number; y: number }): void;
+  resetLayout(view: 'chart' | 'tree' | 'network'): void;
+  lineStyle: 'step' | 'curve' | 'straight';
+  cycleLineStyle(): void;
+  /** Show every line's label, or only those touching the selected person. */
+  allLabels: boolean;
+  toggleLabels(): void;
   toggleTheme(): void;
   toggleLane(s: Side): void;
   toggleRole(r: string): void;
   setDialog(d: Dialog): void;
   setPalette(v: boolean): void;
   setPath(from: string | null, to: string | null): void;
-  notify(msg: string, kind?: 'ok' | 'err'): void;
+  /** Sonner toast; pass `action` for an inline button such as Undo. */
+  notify(msg: string, kind?: 'ok' | 'err', action?: { label: string; onClick: () => void }): void;
+  /** Side-panel tab; rails open a tab in one click. */
+  panelTab: PanelTab;
+  openPanel(id: string, tab: PanelTab): void;
+  setPanelTab(t: PanelTab): void;
+  minimap: boolean;
+  legend: boolean;
+  toggleMinimap(): void;
+  toggleLegend(): void;
 }
+
+export type PanelTab = 'details' | 'relations' | 'path' | 'history';
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -67,6 +99,14 @@ function readPref<T extends string>(k: string, fallback: T): T {
 }
 function writePref(k: string, v: string) {
   try { localStorage.setItem(`sft:${cfg.userId}:pref:${k}`, v); } catch { /* ignore */ }
+}
+
+/** UI language and relation language from saved prefs. English by default; relation names follow the UI language until changed. */
+function readLangs(): { uiLang: UiLang; lang: Lang } {
+  const stored = readPref('uiLang', 'en');
+  const uiLang: UiLang = isUiLang(stored) ? stored : 'en';
+  setRuntimeUiLang(uiLang);
+  return { uiLang, lang: readPref<Lang>('lang', uiLang) };
 }
 
 export const useStore = create<State>((set, get) => {
@@ -79,7 +119,7 @@ export const useStore = create<State>((set, get) => {
         set((s) => ({ saving: false, cases: [metaOf(cf), ...s.cases.filter((c) => c.id !== cf.id)] }));
       } catch (e) {
         set({ saving: false });
-        get().notify(`Save नहीं हुआ: ${(e as Error).message}`, 'err');
+        get().notify(t('toast.saveFailed', { msg: (e as Error).message }), 'err');
       }
     }, 400);
   };
@@ -95,8 +135,9 @@ export const useStore = create<State>((set, get) => {
     cf: null,
     past: [],
     future: [],
-    lang: readPref<Lang>('lang', 'hi'),
-    view: 'tree',
+    ...readLangs(),
+    view: readPref<View>('view', 'chart'),
+    cardSize: readPref<'normal' | 'compact'>('cardSize', 'compact'),
     theme: readPref<'dark' | 'light'>('theme', 'dark'),
     collapsed: new Set(),
     selectedId: null,
@@ -104,7 +145,6 @@ export const useStore = create<State>((set, get) => {
     pathTo: null,
     dialog: null,
     palette: false,
-    toast: null,
     saving: false,
     roleFilter: new Set(),
     ready: false,
@@ -113,7 +153,7 @@ export const useStore = create<State>((set, get) => {
       // the host page may set window.SFT_CONFIG (or call mount with a config) after this module loaded
       cfg = getConfig();
       adapter = createAdapter(cfg);
-      set({ user: { id: cfg.userId, name: cfg.userName }, lang: readPref<Lang>('lang', 'hi'), theme: readPref<'dark' | 'light'>('theme', 'dark') });
+      set({ user: { id: cfg.userId, name: cfg.userName }, ...readLangs(), theme: readPref<'dark' | 'light'>('theme', 'dark') });
       try {
         const cases = await adapter.listCases();
         set({ cases });
@@ -125,7 +165,7 @@ export const useStore = create<State>((set, get) => {
           await get().loadDemo();
         }
       } catch (e) {
-        get().notify(`Data load नहीं हुआ: ${(e as Error).message}`, 'err');
+        get().notify(t('toast.loadFailed', { msg: (e as Error).message }), 'err');
       }
       set({ ready: true });
     },
@@ -138,14 +178,14 @@ export const useStore = create<State>((set, get) => {
 
     async newCase(title, firNo) {
       const cf = emptyCase(title, firNo);
-      cf.audit.push({ ts: Date.now(), user: cfg.userName, action: 'case', detail: 'नया case बनाया' });
+      cf.audit.push({ ts: Date.now(), user: cfg.userName, action: 'case', detail: t('audit.newCase') });
       await adapter.saveCase(cf);
       set((s) => ({ cases: [metaOf(cf), ...s.cases], dialog: null }));
       openFile(cf);
     },
 
-    async loadDemo() {
-      const cf = demoCase();
+    async loadDemo(kind = 'basic') {
+      const cf = kind === 'zenith' ? zenithDemoCase() : demoCase();
       await adapter.saveCase(cf);
       set((s) => ({ cases: [metaOf(cf), ...s.cases], dialog: null }));
       openFile(cf);
@@ -162,8 +202,8 @@ export const useStore = create<State>((set, get) => {
     },
 
     async importCase(cf) {
-      if (!cf || typeof cf !== 'object' || !cf.persons || !cf.edges) throw new Error('यह Family Tree JSON file नहीं है');
-      cf.audit = [...(cf.audit ?? []), { ts: Date.now(), user: cfg.userName, action: 'import', detail: 'JSON से import' }];
+      if (!cf || typeof cf !== 'object' || !cf.persons || !cf.edges) throw new Error(t('err.notFamilyJson'));
+      cf.audit = [...(cf.audit ?? []), { ts: Date.now(), user: cfg.userName, action: 'import', detail: t('audit.import') }];
       cf.updatedAt = Date.now();
       await adapter.saveCase(cf);
       set((s) => ({ cases: [metaOf(cf), ...s.cases.filter((c) => c.id !== cf.id)] }));
@@ -213,7 +253,45 @@ export const useStore = create<State>((set, get) => {
     },
     select(id) { set({ selectedId: id }); },
     setLang(l) { writePref('lang', l); set({ lang: l }); },
-    setView(v) { set({ view: v }); },
+    setUiLang(l) {
+      writePref('uiLang', l);
+      writePref('lang', l);
+      setRuntimeUiLang(l);
+      set({ uiLang: l, lang: l });
+    },
+    setView(v) { writePref('view', v); set({ view: v }); },
+    moveCard(view, id, pos) {
+      const cf = get().cf;
+      if (!cf) return;
+      const layout = { ...(cf.layout ?? {}) };
+      layout[view] = { ...(layout[view] ?? {}), [id]: { x: Math.round(pos.x), y: Math.round(pos.y) } };
+      const d = { ...cf, layout };
+      set({ cf: d });
+      persist(d);
+    },
+    resetLayout(view) {
+      const cf = get().cf;
+      if (!cf?.layout?.[view]) return;
+      const layout = { ...cf.layout };
+      delete layout[view];
+      const d = { ...cf, layout };
+      set({ cf: d });
+      persist(d);
+    },
+    lineStyle: readPref<'step' | 'curve' | 'straight'>('lineStyle', 'step'),
+    cycleLineStyle() {
+      const order = ['step', 'curve', 'straight'] as const;
+      const next = order[(order.indexOf(get().lineStyle) + 1) % order.length];
+      writePref('lineStyle', next);
+      set({ lineStyle: next });
+    },
+    allLabels: false,
+    toggleLabels() { set({ allLabels: !get().allLabels }); },
+    toggleCardSize() {
+      const c = get().cardSize === 'compact' ? 'normal' : 'compact';
+      writePref('cardSize', c);
+      set({ cardSize: c });
+    },
     toggleTheme() {
       const t = get().theme === 'dark' ? 'light' : 'dark';
       writePref('theme', t);
@@ -234,10 +312,17 @@ export const useStore = create<State>((set, get) => {
     setDialog(d) { set({ dialog: d }); },
     setPalette(v) { set({ palette: v }); },
     setPath(from, to) { set({ pathFrom: from, pathTo: to }); },
-    notify(msg, kind = 'ok') {
-      set({ toast: { msg, kind } });
-      setTimeout(() => { if (get().toast?.msg === msg) set({ toast: null }); }, 3500);
+    notify(msg, kind = 'ok', action) {
+      if (kind === 'err') toast.error(msg, { duration: 6000, action });
+      else toast(msg, { action });
     },
+    panelTab: 'details',
+    openPanel(id, tab) { set({ selectedId: id, panelTab: tab }); },
+    setPanelTab(t) { set({ panelTab: t }); },
+    minimap: true,
+    legend: false,
+    toggleMinimap() { set({ minimap: !get().minimap }); },
+    toggleLegend() { set({ legend: !get().legend }); },
   };
 });
 

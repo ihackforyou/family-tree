@@ -1,10 +1,15 @@
 import { useMemo, useState } from 'react';
+import { Command } from 'cmdk';
+import { Modal } from './ui/Modal';
 import { useStore } from '../store';
 import { searchTemplates } from '../engine/templates';
 import { computeRelations, relationLabel } from '../engine/relations';
 import { Avatar } from './PersonNode';
 import { matchPerson } from './PersonPicker';
 import type { Person } from '../types';
+import { SIDE_META } from './meta';
+import { pick, pickOther, type TKey } from '../i18n';
+import { useT, useUiLang } from '../i18n/useT';
 
 interface Item {
   key: string;
@@ -22,9 +27,10 @@ interface Item {
 export function CommandPalette() {
   const cf = useStore((s) => s.cf)!;
   const lang = useStore((s) => s.lang);
+  const t = useT();
+  const ui = useUiLang();
   const st = useStore.getState();
   const [q, setQ] = useState('');
-  const [i, setI] = useState(0);
   const close = () => st.setPalette(false);
 
   const items = useMemo<Item[]>(() => {
@@ -39,11 +45,11 @@ export function CommandPalette() {
     const addCmd = m1 ? { who: m1[1], rel: m1[2] } : m2 ? { who: m2[2], rel: m2[1] } : null;
     if (addCmd) {
       const p = find(addCmd.who);
-      const t = searchTemplates(addCmd.rel)[0];
-      if (p && t) {
+      const tpl = searchTemplates(addCmd.rel)[0];
+      if (p && tpl) {
         out.push({
-          key: 'cmd-add', kind: 'command', title: `${p.name} का ${t.hi} जोड़ें`, sub: t.en,
-          run: () => { close(); st.setDialog({ type: 'add', anchorId: p.id, tplId: t.id }); },
+          key: 'cmd-add', kind: 'command', title: t('cmd.add', { name: p.name, rel: pick(tpl, ui) }), sub: pickOther(tpl, ui),
+          run: () => { close(); st.setDialog({ type: 'add', anchorId: p.id, tplId: tpl.id }); },
         });
       }
     }
@@ -55,24 +61,24 @@ export function CommandPalette() {
       if (a && b && a.id !== b.id) {
         const lbl = relationLabel(computeRelations(cf, a.id).get(b.id), lang);
         out.push({
-          key: 'cmd-path', kind: 'path', title: `${b.name}, ${a.name} के ${lbl}`, sub: 'Canvas पर रास्ता दिखाएँ',
+          key: 'cmd-path', kind: 'path', title: t('cmd.path', { a: a.name, b: b.name, rel: lbl }), sub: t('cmd.pathSub'),
           run: () => { close(); st.setPath(a.id, b.id); st.select(a.id); },
         });
       }
     }
 
     const actions: Item[] = [
-      { key: 'a-tree', kind: 'view', title: 'Tree view', sub: 'पीढ़ी के हिसाब से', run: () => { st.setView('tree'); close(); } },
-      { key: 'a-net', kind: 'view', title: 'Network view', sub: 'सबको एक साथ', run: () => { st.setView('network'); close(); } },
+      { key: 'a-tree', kind: 'view', title: t('cmd.tree'), sub: t('cmd.treeSub'), run: () => { st.setView('tree'); close(); } },
+      { key: 'a-net', kind: 'view', title: t('cmd.network'), sub: t('cmd.networkSub'), run: () => { st.setView('network'); close(); } },
       { key: 'a-undo', kind: 'action', title: 'Undo', sub: 'Ctrl+Z', run: () => { st.undo(); close(); } },
       { key: 'a-redo', kind: 'action', title: 'Redo', sub: 'Ctrl+Shift+Z', run: () => { st.redo(); close(); } },
-      { key: 'a-case', kind: 'action', title: 'केस बदलें / नया केस', run: () => { close(); st.setDialog({ type: 'cases' }); } },
-      { key: 'a-pat', kind: 'lane', title: 'पितृ पक्ष छोटा / बड़ा करें', run: () => { st.toggleLane('paternal'); close(); } },
-      { key: 'a-mat', kind: 'lane', title: 'मातृ पक्ष छोटा / बड़ा करें', run: () => { st.toggleLane('maternal'); close(); } },
-      { key: 'a-inl', kind: 'lane', title: 'ससुराल पक्ष छोटा / बड़ा करें', run: () => { st.toggleLane('inlaw'); close(); } },
-      { key: 'a-ass', kind: 'lane', title: 'सहयोगी छोटा / बड़ा करें', run: () => { st.toggleLane('associate'); close(); } },
-      { key: 'a-clear', kind: 'action', title: 'Highlight हटाएँ', run: () => { st.setPath(null, null); close(); } },
-      { key: 'a-theme', kind: 'action', title: 'Light / Dark theme', run: () => { st.toggleTheme(); close(); } },
+      { key: 'a-case', kind: 'action', title: t('cmd.cases'), run: () => { close(); st.setDialog({ type: 'cases' }); } },
+      ...(['paternal', 'maternal', 'inlaw', 'associate'] as const).map<Item>((side) => ({
+        key: `a-lane-${side}`, kind: 'lane', title: t('cmd.lane', { side: pick(SIDE_META[side], ui) }),
+        run: () => { st.toggleLane(side); close(); },
+      })),
+      { key: 'a-clear', kind: 'action', title: t('path.clear'), run: () => { st.setPath(null, null); close(); } },
+      { key: 'a-theme', kind: 'action', title: t('cmd.theme'), run: () => { st.toggleTheme(); close(); } },
     ];
     const lower = text.toLowerCase();
     const rel = cf.focusId ? computeRelations(cf, cf.focusId) : new Map();
@@ -80,47 +86,49 @@ export function CommandPalette() {
       .filter((p) => matchPerson(p, text))
       .slice(0, 12)
       .map<Item>((p) => ({
-        key: p.id, kind: 'person', person: p, title: p.isGhost ? 'अज्ञात (ghost)' : p.name,
+        key: p.id, kind: 'person', person: p, title: p.isGhost ? t('common.unknownGhost') : p.name,
         sub: [relationLabel(rel.get(p.id), lang), p.mobiles[0], p.aliases[0]].filter(Boolean).join(' · '),
         run: () => { st.select(p.id); close(); },
       }));
     out.push(...people);
     out.push(...actions.filter((a) => !lower || a.title.toLowerCase().includes(lower) || a.sub?.toLowerCase().includes(lower)));
     return out.slice(0, 30);
-  }, [q, cf, lang, st]);
+  }, [q, cf, lang, st, t, ui]);
 
-  const go = (idx: number) => items[idx]?.run();
+  const people = items.filter((it) => it.kind === 'person');
+  const rest = items.filter((it) => it.kind !== 'person');
+  const row = (it: Item) => (
+    <Command.Item key={it.key} value={it.key} onSelect={it.run} className="palette-item">
+      {it.person && <Avatar person={it.person} size={28} />}
+      <div style={{ minWidth: 0 }}>
+        <div>{it.title}</div>
+        {it.sub && <div className="sub">{it.sub}</div>}
+      </div>
+      <span className="kind">{t(`kind.${it.kind}` as TKey)}</span>
+    </Command.Item>
+  );
 
+  // cmdk handles ↑ ↓ Enter, looping and scroll-into-view; Base UI handles Esc, focus and outside click.
   return (
-    <div className="overlay palette" onMouseDown={(e) => e.target === e.currentTarget && close()}>
-      <div className="dialog" role="dialog" aria-label="Command palette">
-        <input
+    <Modal onClose={close} label={t('rr.search')} instant className="palette">
+      <Command shouldFilter={false} loop label={t('rr.search')}>
+        <Command.Input
           className="palette-input"
           autoFocus
-          placeholder='नाम / mobile खोजें, या लिखें: "Rahul का मामा जोड़ो", "Rahul और Vikas का रिश्ता"'
+          placeholder={t('cmd.ph')}
           value={q}
-          onChange={(e) => { setQ(e.target.value); setI(0); }}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') close();
-            else if (e.key === 'ArrowDown') { e.preventDefault(); setI((x) => Math.min(items.length - 1, x + 1)); }
-            else if (e.key === 'ArrowUp') { e.preventDefault(); setI((x) => Math.max(0, x - 1)); }
-            else if (e.key === 'Enter') go(i);
-          }}
+          onValueChange={setQ}
         />
-        <div className="palette-list">
-          {items.map((it, idx) => (
-            <div key={it.key} className={`palette-item ${idx === i ? 'on' : ''}`} onMouseEnter={() => setI(idx)} onClick={() => go(idx)}>
-              {it.person && <Avatar person={it.person} size={28} />}
-              <div style={{ minWidth: 0 }}>
-                <div>{it.title}</div>
-                {it.sub && <div className="sub">{it.sub}</div>}
-              </div>
-              <span className="kind">{it.kind}</span>
-            </div>
-          ))}
-          {!items.length && <div className="muted" style={{ padding: 12 }}>कुछ नहीं मिला</div>}
-        </div>
-      </div>
-    </div>
+        <Command.List className="palette-list">
+          <Command.Empty className="palette-empty">{t('cmd.empty')}</Command.Empty>
+          {rest.filter((it) => it.kind === 'command' || it.kind === 'path').map(row)}
+          {people.length > 0 && <Command.Group heading={t('cmd.people')}>{people.map(row)}</Command.Group>}
+          {rest.some((it) => it.kind !== 'command' && it.kind !== 'path') && (
+            <Command.Group heading={t('cmd.actions')}>{rest.filter((it) => it.kind !== 'command' && it.kind !== 'path').map(row)}</Command.Group>
+          )}
+        </Command.List>
+        <div className="palette-foot"><span><span className="kbd">↑↓</span> {t('cmd.kbdSelect')}</span><span><span className="kbd">Enter</span> {t('cmd.kbdOpen')}</span><span><span className="kbd">Esc</span> {t('cmd.kbdClose')}</span></div>
+      </Command>
+    </Modal>
   );
 }

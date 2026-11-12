@@ -1,6 +1,7 @@
 import type { CaseFile, Confidence, Edge, EdgeKind, Gender, Person } from '../types';
 import { buildIndex, siblingsOf } from './relations';
 import type { RelationTemplate, TStep } from './templates';
+import { t } from '../i18n';
 
 /**
  * Pure-ish mutations on a CaseFile draft. Callers pass a shallow copy
@@ -62,12 +63,12 @@ function isAncestor(cf: CaseFile, ancestor: string, id: string): boolean {
 }
 
 export function addEdge(cf: CaseFile, kind: EdgeKind, from: string, to: string, meta: EdgeMeta = {}): Edge {
-  if (from === to) throw new RelationError('कोई व्यक्ति खुद से रिश्ता नहीं रख सकता।');
+  if (from === to) throw new RelationError(t('err.selfRelation'));
   const existing = Object.values(cf.edges).find((e) => sameEdge(e, kind, from, to));
   if (existing) return existing;
   if (kind === 'parent') {
     if (isAncestor(cf, to, from)) {
-      throw new RelationError('एक व्यक्ति अपना ही पूर्वज नहीं हो सकता (cycle)।');
+      throw new RelationError(t('err.cycle'));
     }
     const subtype = meta.subtype ?? 'biological';
     if (subtype === 'biological') {
@@ -76,10 +77,10 @@ export function addEdge(cf: CaseFile, kind: EdgeKind, from: string, to: string, 
       );
       const parentGender = cf.persons[from]?.gender;
       if (bio.length >= 2) {
-        throw new RelationError("Biological माता-पिता 2 से ज़्यादा नहीं हो सकते। Step-parent के लिए 'सौतेला' चुनें।");
+        throw new RelationError(t('err.twoParents'));
       }
       if (parentGender && parentGender !== 'unknown' && bio.some((e) => cf.persons[e.from]?.gender === parentGender)) {
-        throw new RelationError(parentGender === 'male' ? 'इस व्यक्ति के पिता पहले से जुड़े हैं।' : 'इस व्यक्ति की माता पहले से जुड़ी हैं।');
+        throw new RelationError(t(parentGender === 'male' ? 'err.fatherExists' : 'err.motherExists'));
       }
     }
   }

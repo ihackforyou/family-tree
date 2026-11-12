@@ -3,7 +3,9 @@ import { Handle, Position, useStore as useFlowStore, type NodeProps, type Node }
 import { Lock, Plus, Skull, Users } from 'lucide-react';
 import type { Person } from '../types';
 import { useStore } from '../store';
-import { ROLE_META, ageText, avatarColor, initials } from './meta';
+import { ROLE_META, STATUS_META, ageText, avatarColor, initials } from './meta';
+import { pick } from '../i18n';
+import { useT, useUiLang } from '../i18n/useT';
 
 export type PersonNodeData = {
   person: Person;
@@ -50,9 +52,15 @@ function PersonNodeInner({ data, selected }: NodeProps<PersonFlowNode>) {
   const { person, primary, secondary, isFocus, dim, onPath } = data;
   const compact = useFlowStore(zoomSelector);
   const setDialog = useStore((s) => s.setDialog);
+  const small = useStore((s) => s.cardSize === 'compact');
+  const t = useT();
+  const ui = useUiLang();
   const role = ROLE_META[person.role];
+  const roleName = pick(role, ui);
+  const displayName = person.isGhost ? t('common.unknown') : person.name;
+  const alias = person.aliases.length ? t('card.alias', { list: person.aliases.join(', ') }) : '';
 
-  if (compact) {
+  if (compact && !small) {
     return (
       <div className={`pdot ${isFocus ? 'focus' : ''}`} style={{ opacity: dim ? 0.25 : 1 }}>
         <Handles />
@@ -65,6 +73,7 @@ function PersonNodeInner({ data, selected }: NodeProps<PersonFlowNode>) {
 
   const cls = [
     'pcard',
+    small && 'mini',
     selected && 'selected',
     isFocus && 'focus',
     person.isGhost && 'ghost',
@@ -79,34 +88,64 @@ function PersonNodeInner({ data, selected }: NodeProps<PersonFlowNode>) {
     setDialog({ type: 'add', anchorId: person.id, preset });
   };
 
-  const meta = [ageText(person.dob, person.approxAge), person.address].filter(Boolean).join(' · ');
+  const meta = [ageText(person.dob, person.approxAge, ui), person.address].filter(Boolean).join(' · ');
+  const arrested = pick(STATUS_META.arrested, ui);
+
+  if (small) {
+    // Minimal card: avatar, name, one relation word. Details are in the side panel / tooltip.
+    const tip = [displayName, `${primary}${secondary ? ' · ' + secondary : ''}`, meta, alias]
+      .filter(Boolean).join('\n');
+    return (
+      <div className={cls} title={tip}>
+        <Handles />
+        <Avatar person={person} size={28} />
+        <div className="pbody">
+          <div className="pname">
+            {person.role !== 'relative' && person.role !== 'unknown' && (
+              <span className="rd" style={{ background: role.color }} aria-label={roleName} />
+            )}
+            <span className="nm">{person.status === 'deceased' && '† '}{displayName}</span>
+          </div>
+          <div className="rel-chip">{primary}</div>
+        </div>
+        {person.status === 'arrested' && <span className="status-icon arrested" title={arrested}><Lock size={11} /></span>}
+        <button className="plus top nodrag" title={t('add.up')} aria-label={t('add.up')} onClick={add('up')}><Plus size={11} /></button>
+        <button className="plus bottom nodrag" title={t('add.down')} aria-label={t('add.down')} onClick={add('down')}><Plus size={11} /></button>
+        <button className="plus left nodrag" title={t('add.sibling')} aria-label={t('add.sibling')} onClick={add('sibling')}><Plus size={11} /></button>
+        <button className="plus right nodrag" title={t('add.spouse')} aria-label={t('add.spouse')} onClick={add('spouse')}><Plus size={11} /></button>
+        <button className="plus social nodrag" title={t('add.social')} aria-label={t('add.social')} onClick={add('social')}><Users size={10} /></button>
+      </div>
+    );
+  }
 
   return (
-    <div className={cls} title={person.aliases.length ? `उर्फ़: ${person.aliases.join(', ')}` : undefined}>
+    <div className={cls} title={alias || undefined}>
       <Handles />
-      {person.role !== 'relative' && person.role !== 'unknown' && (
-        <span className="role-badge" style={{ background: role.color }}>{role.hi}</span>
-      )}
       <Avatar person={person} />
       <div className="pbody">
         <div className="pname">
-          {person.status === 'deceased' && '† '}
-          {person.isGhost ? 'अज्ञात' : person.name}
+          {person.role !== 'relative' && person.role !== 'unknown' && (
+            <span className="rd" style={{ background: role.color }} title={roleName} aria-label={roleName} />
+          )}
+          <span className="nm">
+            {person.status === 'deceased' && '† '}
+            {displayName}
+          </span>
         </div>
         <div className="rel-chip" title={`${primary}${secondary ? ' · ' + secondary : ''}`}>
           {primary}
           {secondary && <span className="sec"> · {secondary}</span>}
         </div>
-        <div className="pmeta">{meta || (person.isGhost ? 'नाम भरने के लिए click करें' : ' ')}</div>
+        <div className="pmeta">{meta || (person.isGhost ? t('card.ghostClick') : ' ')}</div>
       </div>
-      {person.status === 'arrested' && <span className="status-icon arrested" title="गिरफ़्तार"><Lock size={14} /></span>}
-      {person.status === 'deceased' && <span className="status-icon" title="मृत"><Skull size={14} /></span>}
+      {person.status === 'arrested' && <span className="status-icon arrested" title={arrested}><Lock size={14} /></span>}
+      {person.status === 'deceased' && <span className="status-icon" title={pick(STATUS_META.deceased, ui)}><Skull size={14} /></span>}
 
-      <button className="plus top nodrag" title="माता / पिता जोड़ें" onClick={add('up')}><Plus size={13} /></button>
-      <button className="plus bottom nodrag" title="बेटा / बेटी जोड़ें" onClick={add('down')}><Plus size={13} /></button>
-      <button className="plus left nodrag" title="भाई / बहन जोड़ें" onClick={add('sibling')}><Plus size={13} /></button>
-      <button className="plus right nodrag" title="पति / पत्नी जोड़ें" onClick={add('spouse')}><Plus size={13} /></button>
-      <button className="plus social nodrag" title="दोस्त / सहयोगी जोड़ें" onClick={add('social')}><Users size={12} /></button>
+      <button className="plus top nodrag" title={t('add.up')} aria-label={t('add.up')} onClick={add('up')}><Plus size={13} /></button>
+      <button className="plus bottom nodrag" title={t('add.down')} aria-label={t('add.down')} onClick={add('down')}><Plus size={13} /></button>
+      <button className="plus left nodrag" title={t('add.sibling')} aria-label={t('add.sibling')} onClick={add('sibling')}><Plus size={13} /></button>
+      <button className="plus right nodrag" title={t('add.spouse')} aria-label={t('add.spouse')} onClick={add('spouse')}><Plus size={13} /></button>
+      <button className="plus social nodrag" title={t('add.social')} aria-label={t('add.social')} onClick={add('social')}><Users size={12} /></button>
     </div>
   );
 }

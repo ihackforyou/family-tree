@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Modal } from './ui/Modal';
 import { X } from 'lucide-react';
 import type { CaseFile, Confidence, Person, Role, SocialType, Status } from '../types';
 import { useStore } from '../store';
-import { GROUP_LABEL, TEMPLATES, searchTemplates, type RelationTemplate } from '../engine/templates';
+import { TEMPLATES, searchTemplates, type RelationTemplate } from '../engine/templates';
+import { pick, pickBoth, pickOther, type TKey } from '../i18n';
+import { useT, useTRich, useUiLang } from '../i18n/useT';
 import { SOCIAL_TYPES } from '../engine/social';
 import { addEdge, addPerson, applyTemplate, draftOf, findDuplicates, newPerson } from '../engine/ops';
 import { computeRelations, relationLabel } from '../engine/relations';
@@ -31,6 +34,9 @@ export function AddDialog({ anchorId, preset, tplId }: { anchorId: string; prese
   const mutate = useStore((s) => s.mutate);
   const setDialog = useStore((s) => s.setDialog);
   const select = useStore((s) => s.select);
+  const t = useT();
+  const tr = useTRich();
+  const ui = useUiLang();
   const anchor = cf.persons[anchorId];
 
   const [mode, setMode] = useState<'family' | 'social'>(preset === 'social' ? 'social' : 'family');
@@ -96,7 +102,7 @@ export function AddDialog({ anchorId, preset, tplId }: { anchorId: string; prese
       return { ok: false as const, err: (e as Error).message };
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cf, mode, tpl, social, targetMode, existingId, name, mobile, age, role, status, lang, anchorId]);
+  }, [cf, mode, tpl, social, targetMode, existingId, name, mobile, age, role, status, lang, anchorId, ui]);
 
   const dups = useMemo(
     () => (targetMode === 'new' && (name.trim().length > 2 || mobile.trim().length > 5) ? findDuplicates(cf, { name, mobiles: mobile ? [mobile] : [] }) : []),
@@ -106,8 +112,8 @@ export function AddDialog({ anchorId, preset, tplId }: { anchorId: string; prese
   const submit = () => {
     if (!canSubmit) return;
     let newId = '';
-    const what = mode === 'family' ? tpl!.hi : SOCIAL_TYPES.find((s) => s.type === social)!.hi;
-    const ok = mutate('add', `${anchor.name} का ${what} जोड़ा`, (d) => {
+    const what = pick(mode === 'family' ? tpl! : SOCIAL_TYPES.find((s) => s.type === social)!, ui);
+    const ok = mutate('add', t('audit.addRelative', { name: anchor.isGhost ? t('common.unknown') : anchor.name, what }), (d) => {
       const meta = { confidence, source: source.trim() || undefined };
       if (mode === 'family') {
         newId = applyTemplate(d, anchorId, tpl!, targetMode === 'existing' ? { existingId } : { person: personDraft() }, meta);
@@ -124,34 +130,31 @@ export function AddDialog({ anchorId, preset, tplId }: { anchorId: string; prese
 
   const grouped = useMemo(() => {
     const g = new Map<string, RelationTemplate[]>();
-    for (const t of results) {
-      const k = q ? 'खोज परिणाम' : GROUP_LABEL[t.group];
+    for (const r of results) {
+      const k = q ? t('add.results') : t(`tplGroup.${r.group}` as TKey);
       const a = g.get(k);
-      if (a) a.push(t);
-      else g.set(k, [t]);
+      if (a) a.push(r);
+      else g.set(k, [r]);
     }
     return [...g.entries()];
-  }, [results, q]);
+  }, [results, q, t]);
 
   return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && setDialog(null)}>
-      <div className="dialog" role="dialog" aria-label="रिश्तेदार जोड़ें" onKeyDown={(e) => {
-        if (e.key === 'Escape') setDialog(null);
-        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submit();
-      }}>
+    <Modal onClose={() => setDialog(null)} label={t('add.aria')}>
+      <div style={{ display: 'contents' }} onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submit(); }}>
         <div className="dialog-head">
-          <h3>{anchor.isGhost ? 'अज्ञात' : anchor.name} से जोड़ें</h3>
+          <h3>{t('add.title', { name: anchor.isGhost ? t('common.unknown') : anchor.name })}</h3>
           <div className="seg" style={{ marginLeft: 'auto' }}>
-            <button className={mode === 'family' ? 'on' : ''} onClick={() => setMode('family')}>परिवार</button>
-            <button className={mode === 'social' ? 'on' : ''} onClick={() => { setMode('social'); setRole('associate'); }}>दोस्त / सहयोगी</button>
+            <button className={mode === 'family' ? 'on' : ''} onClick={() => setMode('family')}>{t('add.family')}</button>
+            <button className={mode === 'social' ? 'on' : ''} onClick={() => { setMode('social'); setRole('associate'); }}>{t('add.socialMode')}</button>
           </div>
-          <button className="btn ghost icon-btn" onClick={() => setDialog(null)} aria-label="बंद करें"><X size={16} /></button>
+          <button className="btn ghost icon-btn" onClick={() => setDialog(null)} aria-label={t('common.close')}><X size={16} /></button>
         </div>
         <div className="dialog-body">
           <input
             ref={searchRef}
             className="input"
-            placeholder={mode === 'family' ? 'रिश्ता खोजें: mama, मामा, mother\'s brother, sala, devar…' : 'खोजें: dost, money mule, SIM…'}
+            placeholder={mode === 'family' ? t('add.searchFamily') : t('add.searchSocial')}
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
@@ -165,29 +168,29 @@ export function AddDialog({ anchorId, preset, tplId }: { anchorId: string; prese
                 <div key={g}>
                   <div className="group-label">{g}</div>
                   <div className="tpl-grid">
-                    {list.map((t) => (
-                      <button key={t.id} className={`tpl ${tpl?.id === t.id ? 'on' : ''}`} onClick={() => setTpl(t)} title={t.en}>
-                        {t.hi}{q && <span className="en">{t.en}</span>}
+                    {list.map((r) => (
+                      <button key={r.id} className={`tpl ${tpl?.id === r.id ? 'on' : ''}`} onClick={() => setTpl(r)} title={pickOther(r, ui)}>
+                        {pick(r, ui)}{q && <span className="en">{pickOther(r, ui)}</span>}
                       </button>
                     ))}
                   </div>
                 </div>
               ))}
-              {!results.length && <div className="muted">कोई रिश्ता नहीं मिला। दूसरा शब्द आज़माएँ (जैसे "chacha", "बुआ", "wife's brother")।</div>}
+              {!results.length && <div className="muted">{t('add.noMatch')}</div>}
             </div>
           ) : (
             <div className="tpl-grid">
               {socialResults.map((s) => (
                 <button key={s.type} className={`tpl ${social === s.type ? 'on' : ''}`} onClick={() => setSocial(s.type)}>
-                  {s.hi}<span className="en">{s.en}</span>
+                  {pick(s, ui)}<span className="en">{pickOther(s, ui)}</span>
                 </button>
               ))}
             </div>
           )}
 
           <div className="radio-row">
-            <button className={`chip ${targetMode === 'new' ? 'on' : ''}`} onClick={() => setTargetMode('new')}>नया व्यक्ति</button>
-            <button className={`chip ${targetMode === 'existing' ? 'on' : ''}`} onClick={() => setTargetMode('existing')}>इस केस में पहले से मौजूद व्यक्ति</button>
+            <button className={`chip ${targetMode === 'new' ? 'on' : ''}`} onClick={() => setTargetMode('new')}>{t('add.newPerson')}</button>
+            <button className={`chip ${targetMode === 'existing' ? 'on' : ''}`} onClick={() => setTargetMode('existing')}>{t('add.existing')}</button>
           </div>
 
           {targetMode === 'existing' ? (
@@ -195,31 +198,31 @@ export function AddDialog({ anchorId, preset, tplId }: { anchorId: string; prese
           ) : (
             <>
               <div className="grid2">
-                <label className="field"><span>नाम *</span>
-                  <input ref={nameRef} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="पूरा नाम / उर्फ़" onKeyDown={(e) => e.key === 'Enter' && submit()} />
+                <label className="field"><span>{t('add.nameReq')}</span>
+                  <input ref={nameRef} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t('add.namePh')} onKeyDown={(e) => e.key === 'Enter' && submit()} />
                 </label>
-                <label className="field"><span>Mobile</span>
+                <label className="field"><span>{t('add.mobile')}</span>
                   <input className="input num" value={mobile} onChange={(e) => setMobile(e.target.value)} placeholder="98xxxxxxxx" />
                 </label>
-                <label className="field"><span>उम्र या जन्म-वर्ष</span>
-                  <input className="input num" value={age} onChange={(e) => setAge(e.target.value)} placeholder="35 या 1990" />
+                <label className="field"><span>{t('add.age')}</span>
+                  <input className="input num" value={age} onChange={(e) => setAge(e.target.value)} placeholder={t('add.agePh')} />
                 </label>
-                <label className="field"><span>भूमिका</span>
+                <label className="field"><span>{t('add.role')}</span>
                   <select className="select" value={role} onChange={(e) => setRole(e.target.value as Role)}>
-                    {Object.entries(ROLE_META).map(([k, v]) => <option key={k} value={k}>{v.hi} · {v.en}</option>)}
+                    {Object.entries(ROLE_META).map(([k, v]) => <option key={k} value={k}>{pickBoth(v, ui)}</option>)}
                   </select>
                 </label>
-                <label className="field"><span>स्थिति</span>
+                <label className="field"><span>{t('add.status')}</span>
                   <select className="select" value={status} onChange={(e) => setStatus(e.target.value as Status)}>
-                    {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.hi} · {v.en}</option>)}
+                    {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{pickBoth(v, ui)}</option>)}
                   </select>
                 </label>
               </div>
               {dups.length > 0 && (
                 <div className="warn">
-                  मिलता-जुलता व्यक्ति पहले से है: <b>{dups[0].name}</b>{dups[0].mobiles[0] ? ` (${dups[0].mobiles[0]})` : ''}.{' '}
+                  {t('add.dup')} <b>{dups[0].name}</b>{dups[0].mobiles[0] ? ` (${dups[0].mobiles[0]})` : ''}.{' '}
                   <button className="btn" style={{ padding: '2px 8px', marginLeft: 6 }} onClick={() => { setTargetMode('existing'); setExistingId(dups[0].id); }}>
-                    उसी को जोड़ें
+                    {t('add.useThem')}
                   </button>
                 </div>
               )}
@@ -227,31 +230,31 @@ export function AddDialog({ anchorId, preset, tplId }: { anchorId: string; prese
           )}
 
           <div className="grid2">
-            <label className="field"><span>भरोसा (confidence)</span>
+            <label className="field"><span>{t('add.confidence')}</span>
               <select className="select" value={confidence} onChange={(e) => setConfidence(e.target.value as Confidence)}>
-                {Object.entries(CONF_META).map(([k, v]) => <option key={k} value={k}>{v.hi} · {v.en}</option>)}
+                {Object.entries(CONF_META).map(([k, v]) => <option key={k} value={k}>{pickBoth(v, ui)}</option>)}
               </select>
             </label>
-            <label className="field"><span>Source (कहाँ से पता चला)</span>
-              <input className="input" value={source} onChange={(e) => setSource(e.target.value)} placeholder="पूछताछ, CDR, bank statement…" />
+            <label className="field"><span>{t('add.source')}</span>
+              <input className="input" value={source} onChange={(e) => setSource(e.target.value)} placeholder={t('add.sourcePh')} />
             </label>
           </div>
 
           {preview && (
             preview.ok ? (
               <div className="preview">
-                Focus <b>{preview.focusName}</b> से रिश्ता: <b>{preview.lbl}</b>
-                {preview.ghosts > 0 && <> · बीच के {preview.ghosts} अज्ञात व्यक्ति (ghost) अपने आप बनेंगे</>}
+                {tr('add.preview', { focus: <b>{preview.focusName}</b>, rel: <b>{preview.lbl}</b> })}
+                {preview.ghosts > 0 && t('add.ghosts', { n: preview.ghosts })}
               </div>
             ) : <div className="warn">{preview.err}</div>
           )}
         </div>
         <div className="dialog-foot">
-          <span className="muted hide-sm" style={{ marginRight: 'auto' }}><span className="kbd">Enter</span> जोड़ें · <span className="kbd">Esc</span> बंद</span>
-          <button className="btn" onClick={() => setDialog(null)}>रद्द करें</button>
-          <button className="btn primary" disabled={!canSubmit || (preview !== null && !preview.ok)} onClick={submit}>जोड़ें</button>
+          <span className="muted hide-sm" style={{ marginRight: 'auto' }}><span className="kbd">Enter</span> {t('add.kbdAdd')} · <span className="kbd">Esc</span> {t('add.kbdClose')}</span>
+          <button className="btn" onClick={() => setDialog(null)}>{t('common.cancel')}</button>
+          <button className="btn primary" disabled={!canSubmit || (preview !== null && !preview.ok)} onClick={submit}>{t('common.add')}</button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

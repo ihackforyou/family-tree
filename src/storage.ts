@@ -1,4 +1,5 @@
 import type { CaseFile } from './types';
+import { t } from './i18n';
 
 /**
  * Host configuration.
@@ -132,7 +133,7 @@ export class ApiAdapter implements StorageAdapter {
     });
     if (res.status === 401) {
       this.cfg.onUnauthorized?.();
-      throw new Error('Login ज़रूरी है (401)');
+      throw new Error(t('err.login'));
     }
     if (!res.ok) throw new Error(`Server error ${res.status}`);
     return res.status === 204 ? null : res.json();
