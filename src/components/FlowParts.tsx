@@ -185,7 +185,7 @@ function KinEdgeInner(props: EdgeProps<KinFlowEdge>) {
   if (data.confidence === 'suspected' && !dash) dash = '2 5';
   const width = data.highlight ? 3 : v === 'criminal' ? 1.8 : v === 'social' ? 1.2 : 1.6;
   const markerEnd = v === 'criminal' || v === 'social' ? `url(#sft-arrow-${v === 'criminal' && !data.highlight ? 'red' : data.highlight ? 'accent' : 'grey'})` : undefined;
-  const text = data.label && data.showLabel ? <EdgeText x={lx} y={ly} text={data.label} /> : null;
+  const text = data.label && data.showLabel ? <EdgeText x={lx} y={ly} text={data.label} color={color} /> : null;
 
   if (v === 'marriage' || v === 'divorced') {
     return (
@@ -204,12 +204,17 @@ function KinEdgeInner(props: EdgeProps<KinFlowEdge>) {
   );
 }
 
-function EdgeText({ x, y, text }: { x: number; y: number; text: string }) {
-  const w = Math.max(40, text.length * 6.6 + 14);
+/**
+ * Line label in a bordered box. The box is opaque and sits on the line, so the line visibly
+ * runs into the box border on both sides instead of passing under the text.
+ */
+function EdgeText({ x, y, text, color }: { x: number; y: number; text: string; color?: string }) {
+  const w = Math.max(36, [...text].length * 6.2 + 14);
+  const h = 18;
   return (
-    <g transform={`translate(${x - w / 2}, ${y - 10})`}>
-      <rect width={w} height={20} rx={4} fill="var(--bg)" />
-      <text x={w / 2} y={14} textAnchor="middle" fontSize={11.5} fill="var(--text-muted)">{text}</text>
+    <g transform={`translate(${x - w / 2}, ${y - h / 2})`} className="edge-label">
+      <rect width={w} height={h} rx={5} fill="var(--surface-2)" stroke={color ?? 'var(--border-strong)'} strokeWidth={1} />
+      <text x={w / 2} y={12.5} textAnchor="middle" fontSize={10.5} fill="var(--text)">{text}</text>
     </g>
   );
 }

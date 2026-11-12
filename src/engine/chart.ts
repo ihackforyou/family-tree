@@ -63,7 +63,7 @@ function rng(seed: number) {
  * other seeds shuffle the order dagre starts from, which `layoutChartBest` uses to search for
  * the arrangement with the fewest crossing lines.
  */
-export function layoutChart(cf: CaseFile, rel: Map<string, RelationInfo>, size: CardSize, seed = 0): ChartLayout {
+export function layoutChart(cf: CaseFile, rel: Map<string, RelationInfo>, size: CardSize, seed = 0, rowGap?: number): ChartLayout {
   const { w: W, h: H } = CARD_SIZES[size];
   const rand = seed ? rng(seed) : null;
   const ids = Object.keys(cf.persons);
@@ -110,7 +110,7 @@ export function layoutChart(cf: CaseFile, rel: Map<string, RelationInfo>, size: 
   });
 
   const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: 'TB', nodesep: size === 'compact' ? 26 : 40, ranksep: size === 'compact' ? 64 : 80, marginx: 0, marginy: 0 });
+  g.setGraph({ rankdir: 'TB', nodesep: size === 'compact' ? 26 : 40, ranksep: rowGap ?? (size === 'compact' ? 72 : 88), marginx: 0, marginy: 0 });
   g.setDefaultEdgeLabel(() => ({}));
   for (const u of unitIds) {
     const members = ordered.get(u)!;
@@ -213,7 +213,7 @@ export function layoutChart(cf: CaseFile, rel: Map<string, RelationInfo>, size: 
   }
 
   // ---- route every line between rows through free lanes, each family on its own track
-  interface Spec { id: string; key: string; start: Pt; end: Pt; r1: number; r2: number; mids: number[] }
+  interface Spec { id: string; key: string; from: string; to: string; start: Pt; end: Pt; r1: number; r2: number; mids: number[] }
   const specs: Spec[] = [];
   const top = (id: string): Pt => { const p = positions.get(id)!; return { x: p.x + W / 2, y: p.y }; };
   const bottom = (id: string): Pt => { const p = positions.get(id)!; return { x: p.x + W / 2, y: p.y + H }; };
@@ -237,7 +237,7 @@ export function layoutChart(cf: CaseFile, rel: Map<string, RelationInfo>, size: 
       const end = top(child);
       const pu = unitOf.get(j ? j.parents[0] : src)!;
       const id = j ? `${src}>${child}` : edges.find((e) => e.kind === 'parent' && e.from === src && e.to === child)!.id;
-      specs.push({ id, key: src, start, end, r1, r2, mids: midsFor(pu, unitOf.get(child)!, r1, r2, start.x, end.x) });
+      specs.push({ id, key: src, from: src, to: child, start, end, r1, r2, mids: midsFor(pu, unitOf.get(child)!, r1, r2, start.x, end.x) });
     }
   }
   for (const e of edges) {
@@ -250,12 +250,36 @@ export function layoutChart(cf: CaseFile, rel: Map<string, RelationInfo>, size: 
     const end = top(l);
     const r1 = Math.min(ra, rb);
     const r2 = Math.max(ra, rb);
-    specs.push({ id: e.id, key: `${u}:link`, start, end, r1, r2, mids: midsFor(unitOf.get(u)!, unitOf.get(l)!, r1, r2, start.x, end.x) });
+    specs.push({ id: e.id, key: `${u}:link`, from: u, to: l, start, end, r1, r2, mids: midsFor(unitOf.get(u)!, unitOf.get(l)!, r1, r2, start.x, end.x) });
   }
+
+  // ---- every line gets its own port: lines leaving / entering one card (or one marriage line)
+  // are spread along its edge, ordered by where they go so they do not cross each other there.
+  const spread = (list: Spec[], which: 'start' | 'end', width: number, maxStep: number, other: (s: Spec) => number) => {
+    if (list.length < 2) return;
+    list.sort((a, b) => other(a) - other(b));
+    const step = Math.min(maxStep, width / (list.length - 1));
+    const centre = list[0][which].x;
+    list.forEach((s, i) => { s[which] = { ...s[which], x: centre + (i - (list.length - 1) / 2) * step }; });
+  };
+  const byFrom = new Map<string, Spec[]>();
+  const byTo = new Map<string, Spec[]>();
+  for (const s of specs) {
+    (byFrom.get(s.from) ?? byFrom.set(s.from, []).get(s.from)!).push(s);
+    (byTo.get(s.to) ?? byTo.set(s.to, []).get(s.to)!).push(s);
+  }
+  const nextX = (s: Spec) => (s.mids.length ? s.mids[0] : s.end.x);
+  const prevX = (s: Spec) => (s.mids.length ? s.mids[s.mids.length - 1] : s.start.x);
+  for (const [from, list] of byFrom) {
+    if (from.startsWith('j:')) spread(list, 'start', COUPLE_GAP - 8, 6, nextX);
+    else spread(list, 'start', W * 0.6, 16, nextX);
+  }
+  for (const [, list] of byTo) spread(list, 'end', W * 0.6, 16, prevX);
 
   // horizontal runs per gap, grouped so lines from one source share a bus (tree look)
   const xAt = (s: Spec, r: number) => (r === s.r1 ? s.start.x : r === s.r2 ? s.end.x : s.mids[r - s.r1 - 1]);
-  const groupKey = (s: Spec, gap: number) => (gap === s.r1 ? s.key : s.id);
+  // each line has its own horizontal run, so no two lines are ever drawn on top of each other
+  const groupKey = (s: Spec, _gap: number) => s.id;
   const gapGroups = new Map<number, Map<string, { min: number; max: number }>>();
   for (const s of specs) {
     for (let gap = s.r1; gap < s.r2; gap++) {
@@ -347,6 +371,14 @@ export function layoutChart(cf: CaseFile, rel: Map<string, RelationInfo>, size: 
     pts.push(s.end);
     routes.set(s.id, pts);
   }
+
+  // Not enough room between two rows for all the separate runs? Lay out again with wider rows.
+  const TRACK = size === 'compact' ? 11 : 13;
+  let maxTracks = 0;
+  for (const v of trackOf.values()) maxTracks = Math.max(maxTracks, v.n);
+  const needed = (maxTracks + 1) * TRACK;
+  const current = rowGap ?? (size === 'compact' ? 72 : 88);
+  if (needed > current && rowGap == null) return layoutChart(cf, rel, size, seed, Math.min(needed, 260));
 
   return { positions, junctions: [...junctions.values()], childSource, unitOf, side: null, routes };
 }
