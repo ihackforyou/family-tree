@@ -2,6 +2,7 @@ import type { CaseFile, Person, SocialType } from './types';
 import { addEdge, addPerson, applyTemplate, newPerson } from './engine/ops';
 import { TEMPLATES } from './engine/templates';
 import { emptyCase } from './demo';
+import { addDemoAvatars } from './demoAvatar';
 
 const tpl = (id: string) => TEMPLATES.find((t) => t.id === id)!;
 const FIR = '0312/2026';
@@ -127,5 +128,5 @@ export function zenithDemoCase(): CaseFile {
   }
 
   cf.audit.push({ ts: Date.now(), user: 'system', action: 'demo', detail: 'Demo case: Zenith Capital fraud' });
-  return cf;
+  return addDemoAvatars(cf);
 }

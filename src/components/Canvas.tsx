@@ -5,7 +5,8 @@ import {
 } from '@xyflow/react';
 import { computeRelations, dualLabel, relationLabel, type RelationInfo } from '../engine/relations';
 import { layoutNetwork, layoutTree, ROW_H } from '../engine/layout';
-import { CARD_SIZES, junctionPoint, layoutChart, type ChartLayout } from '../engine/chart';
+import { CARD_SIZES, junctionPoint, type ChartLayout } from '../engine/chart';
+import { layoutChartBest } from '../engine/chartBest';
 import { isCriminal, socialLabel } from '../engine/social';
 import type { SocialType } from '../types';
 import { useStore } from '../store';
@@ -67,12 +68,20 @@ export function Canvas() {
     return { nodes, edges };
   }, [cf, pathFrom, pathTo]);
 
+  // The chart search is the costly part: redo it only when people, links, focus or card size change.
+  const chartLayout = useMemo(
+    () => (view === 'chart' ? layoutChartBest(cf, rel, cardSize) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [view, cf.persons, cf.edges, rel, cardSize],
+  );
+  const manualMoved = view !== 'table' && !!cf.layout?.[view] && Object.keys(cf.layout[view]!).length > 0;
+
   const computed = useMemo(() => {
     const nodes: Node[] = [];
     let positions: Map<string, { x: number; y: number }>;
     let chart: ChartLayout | null = null;
     if (view === 'chart') {
-      chart = layoutChart(cf, rel, cardSize);
+      chart = chartLayout!;
       positions = chart.positions;
     } else if (view === 'tree') {
       const lay = layoutTree(rel, collapsed);
@@ -175,6 +184,7 @@ export function Canvas() {
             data: {
               variant: e.subtype && e.subtype !== 'biological' ? 'adopt' : 'blood', confidence: e.confidence,
               highlight: hl, dim: !!path && !hl, floating: false, lineStyle, showLabel: false,
+              route: chart && !manualMoved ? chart.routes.get(key) : undefined,
             },
             zIndex: hl ? 5 : 0,
           });
@@ -208,12 +218,13 @@ export function Canvas() {
         data: {
           variant, confidence: e.confidence, highlight: hl, dim: !!path && !hl,
           floating: false, label, lineStyle, showLabel: showLabel || (e.kind !== 'social' && !!label),
+          route: chart && !manualMoved ? chart.routes.get(e.id) : undefined,
         },
         zIndex: hl ? 5 : e.kind === 'social' ? 1 : 0,
       });
     }
     return { nodes, edges };
-  }, [cf, rel, view, collapsed, lang, selectedId, roleFilter, path, focusId, cardSize, size, lineStyle, allLabels, t]);
+  }, [cf, rel, view, collapsed, lang, selectedId, roleFilter, path, focusId, size, lineStyle, allLabels, t, chartLayout, manualMoved]);
 
   const legend = useStore((s) => s.legend);
   const minimap = useStore((s) => s.minimap);

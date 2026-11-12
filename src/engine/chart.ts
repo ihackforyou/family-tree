@@ -35,6 +35,8 @@ export interface ChartLayout {
   unitOf: Map<string, string>;
   /** kept for compatibility; associates are now part of the chart */
   side: null;
+  /** Pre-routed orthogonal lines (line id → points), valid while no card has been moved by hand. */
+  routes: Map<string, { x: number; y: number }[]>;
 }
 
 const SIDE_RANK: Record<string, number> = { paternal: 0, self: 1, core: 1, maternal: 2, inlaw: 3, associate: 4, unlinked: 5 };
@@ -45,10 +47,31 @@ function orderUnit(members: Person[]): Person[] {
   return [...members].sort((a, b) => rank(a) - rank(b) || a.createdAt - b.createdAt);
 }
 
-export function layoutChart(cf: CaseFile, rel: Map<string, RelationInfo>, size: CardSize): ChartLayout {
+/** Small deterministic PRNG so a given seed always gives the same layout. */
+function rng(seed: number) {
+  let t = seed * 2654435761 >>> 0;
+  return () => {
+    t = (t + 0x6d2b79f5) >>> 0;
+    let x = Math.imul(t ^ (t >>> 15), 1 | t);
+    x ^= x + Math.imul(x ^ (x >>> 7), 61 | x);
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * Lays out the chart. `seed` 0 uses the natural order (father's side left, in-laws right);
+ * other seeds shuffle the order dagre starts from, which `layoutChartBest` uses to search for
+ * the arrangement with the fewest crossing lines.
+ */
+export function layoutChart(cf: CaseFile, rel: Map<string, RelationInfo>, size: CardSize, seed = 0): ChartLayout {
   const { w: W, h: H } = CARD_SIZES[size];
+  const rand = seed ? rng(seed) : null;
   const ids = Object.keys(cf.persons);
   const edges = Object.values(cf.edges).filter((e) => cf.persons[e.from] && cf.persons[e.to]);
+  if (rand) {
+    const tie = new Map(edges.map((e) => [e.id, rand()]));
+    edges.sort((a, b) => tie.get(a.id)! - tie.get(b.id)!);
+  }
 
   // ---- family units: people joined by spouse edges
   const parent = new Map<string, string>(ids.map((id) => [id, id]));
@@ -78,9 +101,11 @@ export function layoutChart(cf: CaseFile, rel: Map<string, RelationInfo>, size: 
   // ---- layered layout of units; insertion order seeds dagre's left-to-right order
   const unitRank = (members: Person[]) => Math.min(...members.map((p) => SIDE_RANK[rel.get(p.id)?.side ?? 'unlinked'] ?? 5));
   const unitDist = (members: Person[]) => Math.min(...members.map((p) => rel.get(p.id)?.steps.length ?? 99));
+  const tieBreak = new Map([...ordered.keys()].map((u) => [u, rand ? rand() : 0]));
   const unitIds = [...ordered.keys()].sort((a, b) => {
     const ma = ordered.get(a)!;
     const mb = ordered.get(b)!;
+    if (rand) return tieBreak.get(a)! - tieBreak.get(b)!;
     return unitRank(ma) - unitRank(mb) || unitDist(ma) - unitDist(mb);
   });
 
@@ -130,6 +155,40 @@ export function layoutChart(cf: CaseFile, rel: Map<string, RelationInfo>, size: 
     members.forEach((p, i) => positions.set(p.id, { x: x0 + i * (W + COUPLE_GAP), y }));
   }
 
+  // ---- ranks (rows) from the unit centres
+  const rankYs = [...new Set([...ordered.keys()].map((u) => Math.round(g.node(u).y)))].sort((a, b) => a - b);
+  const rankOfY = (y: number) => {
+    let best = 0;
+    rankYs.forEach((ry, i) => { if (Math.abs(ry - y) < Math.abs(rankYs[best] - y)) best = i; });
+    return best;
+  };
+  const rankOf = (id: string) => rankOfY(positions.get(id)!.y + H / 2);
+
+  // ---- face each spouse towards their own parents so parent lines do not cross the couple
+  const parentsOf = new Map<string, string[]>();
+  for (const e of edges) if (e.kind === 'parent') (parentsOf.get(e.to) ?? parentsOf.set(e.to, []).get(e.to)!).push(e.from);
+  const parentX = (id: string) => {
+    const ps = parentsOf.get(id);
+    if (!ps?.length) return null;
+    return ps.reduce((sum, q) => sum + positions.get(q)!.x + W / 2, 0) / ps.length;
+  };
+  const unitsTopDown = [...ordered.entries()].sort((a, b) => positions.get(a[1][0].id)!.y - positions.get(b[1][0].id)!.y);
+  for (const [u, members] of unitsTopDown) {
+    if (members.length !== 2) continue;
+    const [a, b] = members;
+    const ka = parentX(a.id);
+    const kb = parentX(b.id);
+    const pa = positions.get(a.id)!;
+    const pb = positions.get(b.id)!;
+    const centre = (pa.x + pb.x + W) / 2;
+    const swap = ka != null && kb != null ? ka > kb : ka != null ? ka > centre : kb != null ? kb < centre : false;
+    if (swap) {
+      positions.set(a.id, pb);
+      positions.set(b.id, pa);
+      ordered.set(u, [b, a]);
+    }
+  }
+
   // ---- where each child's line starts: the parents' marriage line, or the single parent
   const junctions = new Map<string, Junction>();
   const childSource = new Map<string, string[]>();
@@ -153,8 +212,146 @@ export function layoutChart(cf: CaseFile, rel: Map<string, RelationInfo>, size: 
     childSource.set(child, sources);
   }
 
-  return { positions, junctions: [...junctions.values()], childSource, unitOf, side: null };
+  // ---- route every line between rows through free lanes, each family on its own track
+  interface Spec { id: string; key: string; start: Pt; end: Pt; r1: number; r2: number; mids: number[] }
+  const specs: Spec[] = [];
+  const top = (id: string): Pt => { const p = positions.get(id)!; return { x: p.x + W / 2, y: p.y }; };
+  const bottom = (id: string): Pt => { const p = positions.get(id)!; return { x: p.x + W / 2, y: p.y + H }; };
+  const midsFor = (ua: string, ub: string, r1: number, r2: number, x1: number, x2: number) => {
+    const ge = g.edge(ua, ub) ?? g.edge(ub, ua);
+    const pts: Pt[] = (ge?.points as Pt[] | undefined) ?? [];
+    const out: number[] = [];
+    for (let r = r1 + 1; r < r2; r++) {
+      const hit = pts.find((q) => Math.abs(q.y - rankYs[r]) < 2);
+      out.push(hit ? hit.x : x1 + ((x2 - x1) * (r - r1)) / (r2 - r1));
+    }
+    return out;
+  };
+  for (const [child, sources] of childSource) {
+    for (const src of sources) {
+      const j = junctions.get(src);
+      const start = j ? { x: j.x, y: j.y } : bottom(src);
+      const r1 = j ? rankOf(j.parents[0]) : rankOf(src);
+      const r2 = rankOf(child);
+      if (r2 <= r1) continue;
+      const end = top(child);
+      const pu = unitOf.get(j ? j.parents[0] : src)!;
+      const id = j ? `${src}>${child}` : edges.find((e) => e.kind === 'parent' && e.from === src && e.to === child)!.id;
+      specs.push({ id, key: src, start, end, r1, r2, mids: midsFor(pu, unitOf.get(child)!, r1, r2, start.x, end.x) });
+    }
+  }
+  for (const e of edges) {
+    if (e.kind !== 'social' && e.kind !== 'sibling') continue;
+    const ra = rankOf(e.from);
+    const rb = rankOf(e.to);
+    if (ra === rb) continue;
+    const [u, l] = ra < rb ? [e.from, e.to] : [e.to, e.from];
+    const start = bottom(u);
+    const end = top(l);
+    const r1 = Math.min(ra, rb);
+    const r2 = Math.max(ra, rb);
+    specs.push({ id: e.id, key: `${u}:link`, start, end, r1, r2, mids: midsFor(unitOf.get(u)!, unitOf.get(l)!, r1, r2, start.x, end.x) });
+  }
+
+  // horizontal runs per gap, grouped so lines from one source share a bus (tree look)
+  const xAt = (s: Spec, r: number) => (r === s.r1 ? s.start.x : r === s.r2 ? s.end.x : s.mids[r - s.r1 - 1]);
+  const groupKey = (s: Spec, gap: number) => (gap === s.r1 ? s.key : s.id);
+  const gapGroups = new Map<number, Map<string, { min: number; max: number }>>();
+  for (const s of specs) {
+    for (let gap = s.r1; gap < s.r2; gap++) {
+      const a = xAt(s, gap);
+      const b = xAt(s, gap + 1);
+      const groups = gapGroups.get(gap) ?? gapGroups.set(gap, new Map()).get(gap)!;
+      const k = groupKey(s, gap);
+      const cur = groups.get(k) ?? { min: Infinity, max: -Infinity };
+      groups.set(k, { min: Math.min(cur.min, a, b), max: Math.max(cur.max, a, b) });
+    }
+  }
+  // where each group's lines enter (top) and leave (bottom) the gap
+  const gapStems = new Map<string, { tops: number[]; bots: number[] }>();
+  for (const s of specs) {
+    for (let gap = s.r1; gap < s.r2; gap++) {
+      const k = `${gap}|${groupKey(s, gap)}`;
+      const st = gapStems.get(k) ?? gapStems.set(k, { tops: [], bots: [] }).get(k)!;
+      st.tops.push(xAt(s, gap));
+      st.bots.push(xAt(s, gap + 1));
+    }
+  }
+  // Interval colouring: groups whose runs do not overlap share a track. Then try every order of the
+  // tracks (few per gap) and keep the one where the fewest stems cut through another group's bus.
+  const trackOf = new Map<string, { t: number; n: number }>();
+  for (const [gap, groups] of gapGroups) {
+    const list = [...groups.entries()].sort((a, b) => a[1].min - b[1].min);
+    const tracksEnd: number[] = [];
+    const assigned: [string, number][] = [];
+    for (const [k, iv] of list) {
+      if (iv.max - iv.min < 1) { assigned.push([k, -1]); continue; }
+      let t = tracksEnd.findIndex((end) => end + 10 < iv.min);
+      if (t < 0) { t = tracksEnd.length; tracksEnd.push(iv.max); } else tracksEnd[t] = iv.max;
+      assigned.push([k, t]);
+    }
+    const n = Math.max(1, tracksEnd.length);
+    const cost = (level: number[]) => {
+      let c = 0;
+      for (const [kp, tp] of assigned) {
+        if (tp < 0) continue;
+        const iv = groups.get(kp)!;
+        for (const [kq, tq] of assigned) {
+          if (kq === kp) continue;
+          const st = gapStems.get(`${gap}|${kq}`)!;
+          const lp = level[tp];
+          const lq = tq < 0 ? n : level[tq]; // a straight drop crosses every bus it passes
+          // q's stem from the top reaches down to its bus: it cuts p's bus if p's bus is higher
+          if (lp < lq || tq < 0) c += st.tops.filter((x) => x > iv.min + 1 && x < iv.max - 1).length;
+          // q's stem to the bottom starts at its bus: it cuts p's bus if p's bus is lower
+          if (lp > lq && tq >= 0) c += st.bots.filter((x) => x > iv.min + 1 && x < iv.max - 1).length;
+        }
+      }
+      return c;
+    };
+    let best = Array.from({ length: n }, (_, i) => i);
+    if (n > 1 && n <= 6) {
+      let bestCost = cost(best);
+      const perm = (arr: number[], k: number) => {
+        if (k === arr.length) {
+          const c = cost(arr);
+          if (c < bestCost) { bestCost = c; best = [...arr]; }
+          return;
+        }
+        for (let i = k; i < arr.length; i++) {
+          [arr[k], arr[i]] = [arr[i], arr[k]];
+          perm(arr, k + 1);
+          [arr[k], arr[i]] = [arr[i], arr[k]];
+        }
+      };
+      perm([...best], 0);
+    }
+    for (const [k, t] of assigned) trackOf.set(`${gap}|${k}`, { t: t < 0 ? 0 : best[t], n });
+  }
+  const busY = (gap: number, k: string) => {
+    const { t, n } = trackOf.get(`${gap}|${k}`) ?? { t: 0, n: 1 };
+    const gTop = rankYs[gap] + H / 2;
+    const gBot = rankYs[gap + 1] - H / 2;
+    return gTop + ((t + 1) * (gBot - gTop)) / (n + 1);
+  };
+  const routes = new Map<string, Pt[]>();
+  for (const s of specs) {
+    const pts: Pt[] = [s.start];
+    let x = s.start.x;
+    for (let gap = s.r1; gap < s.r2; gap++) {
+      const y = busY(gap, groupKey(s, gap));
+      const nx = xAt(s, gap + 1);
+      pts.push({ x, y }, { x: nx, y });
+      x = nx;
+    }
+    pts.push(s.end);
+    routes.set(s.id, pts);
+  }
+
+  return { positions, junctions: [...junctions.values()], childSource, unitOf, side: null, routes };
 }
+
+type Pt = { x: number; y: number };
 
 /** Middle of the line between two parent cards (works after either card is dragged too). */
 export function junctionPoint(a: { x: number; y: number }, b: { x: number; y: number }, W: number, H: number) {

@@ -1,6 +1,7 @@
 import type { CaseFile, Person } from './types';
 import { addEdge, addPerson, applyTemplate, newPerson, uid } from './engine/ops';
 import { TEMPLATES } from './engine/templates';
+import { addDemoAvatars } from './demoAvatar';
 
 const tpl = (id: string) => TEMPLATES.find((t) => t.id === id)!;
 
@@ -55,5 +56,5 @@ export function demoCase(): CaseFile {
   addEdge(cf, 'social', s.id, victim.id, { subtype: 'upi-counterparty', confidence: 'confirmed', source: 'NCRP complaint (demo)' });
 
   cf.audit.push({ ts: Date.now(), user: 'system', action: 'demo', detail: 'Demo case बनाया गया' });
-  return cf;
+  return addDemoAvatars(cf);
 }

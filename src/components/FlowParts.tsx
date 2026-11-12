@@ -92,6 +92,8 @@ export type KinEdgeData = {
   label?: string;
   lineStyle?: 'step' | 'curve' | 'straight';
   showLabel?: boolean;
+  /** pre-routed points from the chart layout (right-angle lanes between rows) */
+  route?: { x: number; y: number }[];
 };
 export type KinFlowEdge = FlowEdge<KinEdgeData, 'kin'>;
 
@@ -130,6 +132,30 @@ function facingSides(a: Rect, b: Rect) {
   };
 }
 
+/** Polyline through the route points with rounded corners; label sits on the longest run. */
+function routedPath(pts: { x: number; y: number }[], radius: number): [string, number, number] {
+  const clean = pts.filter((p, i) => i === 0 || Math.abs(p.x - pts[i - 1].x) + Math.abs(p.y - pts[i - 1].y) > 0.5);
+  let d = `M${clean[0].x},${clean[0].y}`;
+  for (let i = 1; i < clean.length; i++) {
+    const p = clean[i];
+    const next = clean[i + 1];
+    if (!next) { d += ` L${p.x},${p.y}`; break; }
+    const prev = clean[i - 1];
+    const r = Math.min(radius, Math.hypot(p.x - prev.x, p.y - prev.y) / 2, Math.hypot(next.x - p.x, next.y - p.y) / 2);
+    const a = { x: p.x - Math.sign(p.x - prev.x) * r, y: p.y - Math.sign(p.y - prev.y) * r };
+    const b = { x: p.x + Math.sign(next.x - p.x) * r, y: p.y + Math.sign(next.y - p.y) * r };
+    d += ` L${a.x},${a.y} Q${p.x},${p.y} ${b.x},${b.y}`;
+  }
+  let best = 0;
+  let lx = clean[0].x;
+  let ly = clean[0].y;
+  for (let i = 1; i < clean.length; i++) {
+    const len = Math.hypot(clean[i].x - clean[i - 1].x, clean[i].y - clean[i - 1].y);
+    if (len > best) { best = len; lx = (clean[i].x + clean[i - 1].x) / 2; ly = (clean[i].y + clean[i - 1].y) / 2; }
+  }
+  return [d, lx, ly];
+}
+
 function KinEdgeInner(props: EdgeProps<KinFlowEdge>) {
   const { id, source, target, data } = props;
   const s = rectOf(useInternalNode(source));
@@ -142,7 +168,8 @@ function KinEdgeInner(props: EdgeProps<KinFlowEdge>) {
   let lx: number;
   let ly: number;
   const common = { sourceX: f.sx, sourceY: f.sy, targetX: f.tx, targetY: f.ty, sourcePosition: f.sp, targetPosition: f.tp };
-  if (data.floating || style === 'straight') [path, lx, ly] = getStraightPath(common);
+  if (data.route && data.route.length > 1 && style !== 'straight') [path, lx, ly] = routedPath(data.route, style === 'curve' ? 22 : 8);
+  else if (data.floating || style === 'straight') [path, lx, ly] = getStraightPath(common);
   else if (style === 'curve') [path, lx, ly] = getBezierPath(common);
   else [path, lx, ly] = getSmoothStepPath({ ...common, borderRadius: 12, offset: 14 });
 
