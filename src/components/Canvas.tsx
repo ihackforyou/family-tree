@@ -138,6 +138,17 @@ export function Canvas() {
       return `${relationLabel(relFrom(anchor).get(pid), lang)} · ${first(anchor)}`;
     };
 
+    // Clicking a person lights up their trail: everyone directly linked (parents, children,
+    // spouse, siblings, associates) and those lines; everything else fades back.
+    const trail = selectedId && !path && cf.persons[selectedId] ? new Set<string>([selectedId]) : null;
+    if (trail && selectedId) {
+      const parentsOfSel = new Set<string>();
+      for (const e of Object.values(cf.edges)) {
+        if (e.from === selectedId) trail.add(e.to);
+        if (e.to === selectedId) { trail.add(e.from); if (e.kind === 'parent') parentsOfSel.add(e.from); }
+      }
+      for (const e of Object.values(cf.edges)) if (e.kind === 'parent' && parentsOfSel.has(e.from)) trail.add(e.to);
+    }
     for (const p of Object.values(cf.persons)) {
       const pos = positions.get(p.id);
       if (!pos) continue;
@@ -156,8 +167,8 @@ export function Canvas() {
           primary: assoc ?? dual.primary,
           secondary: assoc ? dual.primary : dual.secondary,
           isFocus: p.id === focusId,
-          dim: dimByRole || dimByPath,
-          onPath: !!path && path.nodes.has(p.id),
+          dim: dimByRole || dimByPath || (!!trail && !trail.has(p.id)),
+          onPath: (!!path && path.nodes.has(p.id)) || (!!trail && trail.has(p.id) && p.id !== selectedId),
         },
         style: { width: size.w, height: size.h },
       };
@@ -179,14 +190,15 @@ export function Canvas() {
           const key = `${viaJunction}>${e.to}`;
           if (drawnFromJunction.has(key)) continue;
           drawnFromJunction.add(key);
+          const onTrail = !!trail && !!selectedId && (viaJunction.split(':').includes(selectedId) || e.to === selectedId || (chart.childSource.get(selectedId) ?? []).includes(viaJunction));
           edges.push({
             id: key, source: viaJunction, target: e.to, type: 'kin',
             data: {
               variant: e.subtype && e.subtype !== 'biological' ? 'adopt' : 'blood', confidence: e.confidence,
-              highlight: hl, dim: !!path && !hl, floating: false, lineStyle, showLabel: false,
+              highlight: hl || onTrail, dim: (!!path && !hl) || (!!trail && !onTrail), floating: false, lineStyle, showLabel: false,
               route: chart && !manualMoved ? chart.routes.get(key) : undefined,
             },
-            zIndex: hl ? 5 : 0,
+            zIndex: hl || onTrail ? 5 : 0,
           });
           continue;
         }
@@ -216,11 +228,11 @@ export function Canvas() {
       edges.push({
         id: e.id, source: e.from, target: e.to, type: 'kin',
         data: {
-          variant, confidence: e.confidence, highlight: hl, dim: !!path && !hl,
+          variant, confidence: e.confidence, highlight: hl || (!!trail && touchesSelection(e.from, e.to)), dim: (!!path && !hl) || (!!trail && !touchesSelection(e.from, e.to)),
           floating: false, label, lineStyle, showLabel: showLabel || (e.kind !== 'social' && !!label),
           route: chart && !manualMoved ? chart.routes.get(e.id) : undefined,
         },
-        zIndex: hl ? 5 : e.kind === 'social' ? 1 : 0,
+        zIndex: hl || (!!trail && touchesSelection(e.from, e.to)) ? 5 : e.kind === 'social' ? 1 : 0,
       });
     }
     return { nodes, edges };
